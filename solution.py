@@ -8,7 +8,9 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 from sklearn.preprocessing import MinMaxScaler
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
+
+from sklearn.naive_bayes import GaussianNB
 
 print('---> Python Script Start', t0 := datetime.datetime.now())
 
@@ -30,14 +32,34 @@ print('---> initial data set up')
 # sector data
 df_sectors = pd.read_csv('data/data0.csv')
 
+N = 25
+
 # price and fin data
 df_data = pd.read_csv('data/data1.csv')
 df_data['date'] = pd.to_datetime(df_data['date']).apply(lambda d: d.date())
+df_data = df_data.sort_values(by=['security','date'])
 
-df_x = df_data[['date', 'security', 'price', 'return30', 'ratio_pe', 'ratio_pcf', 'ratio_de', 'ratio_roe', 'ratio_roa']].copy()
+df_data['EMA'] = df_data.groupby('security')['price'].transform(
+    lambda x: x.ewm(span=N, adjust=False).mean()
+)
+
+df_data['BB_UP'] = df_data.groupby('security')['price'].transform(
+    lambda x: x.ewm(span=N, adjust=False).mean() + 2 * x.ewm(span=N, adjust=False).std()
+)
+df_data['BB_DOWN'] = df_data.groupby('security')['price'].transform(
+    lambda x: x.ewm(span=N, adjust=False).mean() - 2 * x.ewm(span=N, adjust=False).std()
+)
+df_data['BB_WIDTH'] = df_data['BB_UP'] - df_data['BB_DOWN']
+df_data['PERCENT_B'] = (df_data['price'] - df_data['BB_DOWN']) / (df_data['BB_UP'] - df_data['BB_DOWN'])
+
+
+df_data = df_data.dropna()
+df_x = df_data[['date', 'security', 'price', 'return30', 'ratio_pe', 'ratio_pcf', 'ratio_de', 'ratio_roe', 'ratio_roa',
+                'EMA','BB_UP','BB_DOWN','BB_WIDTH', 'PERCENT_B']].copy()
 df_y = df_data[['date', 'security', 'label']].copy()
 
-list_vars1 = ['price', 'return30', 'ratio_pe', 'ratio_pcf', 'ratio_de', 'ratio_roe', 'ratio_roa']
+list_vars1 = ['price', 'return30', 'ratio_pe', 'ratio_pcf', 'ratio_de', 'ratio_roe', 'ratio_roa',
+              'EMA','BB_UP','BB_DOWN','BB_WIDTH', 'PERCENT_B']
 
 # we will perform walk forward validation for testing the buys - https://www.linkedin.com/pulse/walk-forward-validation-yeshwanth-n
 df_signals = pd.DataFrame(data={'date':df_x.loc[(df_x['date']>=start_test) & (df_x['date']<=end_test), 'date'].values})
@@ -72,8 +94,15 @@ for i in range(len(df_signals)):
 
     # fit a classifier
     if i == 0:
-        clf = RandomForestClassifier(n_estimators=10, criterion='gini', max_depth=10, min_samples_split=1000, min_samples_leaf=1000, min_weight_fraction_leaf=0.0, max_features='sqrt', random_state=0)
+        clf = GradientBoostingClassifier(
+        n_estimators=100,    # Number of boosting stages
+        learning_rate=0.1,   # Shrinks the contribution of each tree
+        max_depth=3,         # Limits the depth of individual trees
+        random_state=0
+        )
         clf.fit(np.array(df_trainx[list_vars1]), df_trainy['label'].values)
+
+        
 
     # predict and calc accuracy - 0.5 is the implicit cuttoff here
     df_testy['signal'] = clf.predict_proba(np.array(df_testx[list_vars1]))[:, 1] # use probs to get strength of classification
